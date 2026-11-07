@@ -9,6 +9,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { checkTransfer } from "./transfer-check.mjs";
+import { checkSwStall } from "./sw-check.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const results = [];
@@ -121,10 +122,11 @@ check("引き継ぎ：transfer.js をゲームの script より前に、この�
   check("感想フォームは名前・メールを聞かない", /id: fun/.test(fy) && !/id: (name|email|mail)/.test(fy) && /labels: \["感想"\]/.test(fy)); }
 check("README の URL のすぐ後ろに全角の字を続けない（Link check が URL の一部と読む）", !/https?:\/\/[\x21-\x7e]*[^\x00-\x7f]/.test(readFileSync(path.join(root, "README.md"), "utf8").replace(/\]\(https?:\/\/[^)\s]+\)/g, "").replace(/<https?:\/\/[^>\s]+>/g, "")));
 { const sw = readFileSync(path.join(root, "sw.js"), "utf8"), mf = JSON.parse(readFileSync(path.join(root, "manifest.webmanifest"), "utf8"));
+  { const st = await checkSwStall(sw); check("PWA：通信が止まっても4秒ほどで保存した画面に切り替わり、少しずつ届く受信は待ち、何も無ければ60秒で返す（shared-workflows template/qa/sw-check.mjs）", st.ok, JSON.stringify(st)); }
   const shell = JSON.parse(sw.match(/SHELL = (\[[^\]]+\])/)[1]);
   check("PWA：sw.js は画面のファイルを全部保存し（引き継ぎの transfer.js も）、外へ何も送らない", ["./index.html", "./data.js", "./gen.js", "./transfer.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"].every((f) => shell.includes(f)) && !/https?:\/\//.test(sw.replace(/^\/\/.*$/gm, "")));
   check("PWA：sw.js は install で取り直す（cache: reload）", /cache: "reload"/.test(sw));
-  check("PWA：本文を受け取り終えるまで保存したものへの切り替えを待ち、保存も通信も無いときは20秒でエラーを返す", /arrayBuffer\(\)\.then\(\(\) => send\(res\)/.test(sw) && /setTimeout\([^;]*Response\.error\(\)[^;]*20000\)/.test(sw));
+  check("PWA：本文が4秒止まったら保存したものに切り替え、保存も通信も無いときは60秒でエラーを返す", /const IDLE = 4000;/.test(sw) && /readAll\(res, fallback, arm\)/.test(sw) && /cap = setTimeout\(\(\) => \{ send\(Response\.error\(\)\); saved\(\); \}, LIMIT\)/.test(sw) && /const LIMIT = 60000;/.test(sw));
   check("「動きを減らす」のときは、すべるスクロールにしない", !/behavior: "smooth"/.test(html) && /A11y\.on\("calm"\) \? "auto" : "smooth"/.test(html));
   check("PWA：manifest にアイコン2つと名前がある", mf.name === "語源すいり" && mf.icons.length >= 2 && mf.start_url === "./"); }
 

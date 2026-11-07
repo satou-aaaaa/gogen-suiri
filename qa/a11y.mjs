@@ -119,6 +119,9 @@ const contrastFn = (skip) => {
     if (!own) continue;
     const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
     if (r.width < 1 || r.height < 1 || cs.visibility === "hidden" || +cs.opacity === 0) continue;
+    // 透明な（opacity 0 の）親の中の字は見えないので測らない（madori-puzzle #17・kippu-10 #22 の CodeRabbit）
+    let hid = false; for (let a = el.parentElement; a && !hid; a = a.parentElement) hid = +getComputedStyle(a).opacity === 0;
+    if (hid) continue;
     if (el.disabled || el.getAttribute("aria-disabled") === "true") continue; // 押せない部品は WCAG の対象外
     let fg = parse(cs.color); if (!fg) continue;
     // うしろの色：自分から上へ、色を重ねていく。絵・グラデーションがあれば測らない
@@ -197,8 +200,13 @@ for (const sc of screens) {
         // 読み上げ用に見えなくした字（.sr など、1px の箱や clip）は数えない
         const b = el.getBoundingClientRect();
         if (b.width <= 2 || b.height <= 2 || (cs.clip && cs.clip !== "auto") || (cs.clipPath && cs.clipPath !== "none")) continue;
-        if (![...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim())) continue;
-        if (el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) cut.push(`${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}「${el.textContent.trim().slice(0, 10)}」`);
+        // 自分の字か、中の span・ruby など（行の中に並ぶもの）の字が切れていないか（span の中の字を見逃していた。2026-11-07 mukashi-narabe #1 の CodeRabbit）
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        // 中の字は、その字の箱が外にはみ出しているときだけ数える（絵や積み木がはみ出すだけの入れ物を数えない）
+        const out = (c) => { const r = c.getBoundingClientRect(); return r.width > 0 && (r.bottom > b.bottom + 2 || r.right > b.right + 2 || r.top < b.top - 2 || r.left < b.left - 2); };
+        const inner = [...el.querySelectorAll("*")].some((c) => getComputedStyle(c).display.startsWith("inline") && !c.closest("svg,canvas,[aria-hidden=true],[hidden]") && [...c.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && out(c));
+        if (!own && !inner) continue;
+        if (inner || el.scrollHeight > el.clientHeight + 2 || el.scrollWidth > el.clientWidth + 2) cut.push(`${el.tagName.toLowerCase()}${el.id ? "#" + el.id : ""}「${el.textContent.trim().slice(0, 10)}」`);
       }
       return { wide, cut };
     });
@@ -236,18 +244,23 @@ for (const sc of screens) {
   check("斜体の日本語が無い（BDA Dyslexia Style Guide）", r.italic.length === 0, r.italic.join(","));
   // Tab で10回動かし、選んだ所に枠（outline か box-shadow）が見えるか。
   // 選ぶ前と後を比べる（いつも付いている影だけで通っていた。2026-11-07 CodeRabbit が chikei-ate #1 で指摘）
-  const noRing = [];
+  const noRing = []; let reached = 0;
   for (let i = 0; i < 10; i++) {
     await page.keyboard.press("Tab");
     const f = await page.evaluate(() => {
       const el = document.activeElement; if (!el || el === document.body) return null;
-      const look = () => { const cs = getComputedStyle(el); return { ol: cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) >= 2 ? `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor} ${cs.outlineOffset}` : "", bs: cs.boxShadow && cs.boxShadow !== "none" ? cs.boxShadow : "" }; };
+      // 透明な色の枠・影は見えないので数えない（madori-puzzle #17 の CodeRabbit）
+      const clear = (c) => c === "transparent" || /rgba\([^)]*,\s*0\)$/.test(c);
+      const look = () => { const cs = getComputedStyle(el); const bs = (cs.boxShadow || "none").split(/,(?![^(]*\))/).filter((x) => x.trim() !== "none" && !/rgba\([^)]*,\s*0\)/.test(x)).join(","); return { ol: cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) >= 2 && !clear(cs.outlineColor) ? `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor} ${cs.outlineOffset}` : "", bs }; };
       const on = look(); el.blur(); const off = look(); el.focus(); // キーボードで動かしたあとの focus() は focus-visible のまま
       return { ok: !!((on.ol && on.ol !== off.ol) || (on.bs && on.bs !== off.bs)), name: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") };
     });
+    if (f) reached++;
     if (f && !f.ok) noRing.push(f.name);
   }
-  check("キーボード（Tab）で選んだ所に枠が見える（WCAG 2.4.7）", noRing.length === 0, noRing.join(","));
+  // どこにも届かない（全部 tabindex=-1 など）と、枠の検査が空のまま通っていた（2026-11-07 gogen-suiri #1 の CodeRabbit）
+  check("キーボード（Tab）でホームの操作部品に届く（WCAG 2.1.1）", reached > 0, `${reached}か所`);
+  check("キーボード（Tab）で選んだ所に枠が見える（WCAG 2.4.7）", reached > 0 && noRing.length === 0, noRing.join(","));
   await ctx.close();
 }
 {
@@ -255,10 +268,11 @@ for (const sc of screens) {
   let live = false;
   for (const sc of screens) {
     const { ctx, page } = await openPage();
-    try { await go(page, sc); live = live || await page.evaluate(() => !!document.querySelector("[aria-live],[role=status],[role=alert]")); } catch { /* 上で数えた */ }
+    // display:none の場所は読み上げられないので数えない。画面を開けなかったら隠さず落とす（kippu-10 #22・onpu-yomi #1 の CodeRabbit）
+    try { await go(page, sc); live = live || await page.evaluate(() => [...document.querySelectorAll("[aria-live],[role=status],[role=alert]")].some((el) => el.getAttribute("aria-live") !== "off" && !el.closest("[aria-hidden=true],[hidden],[inert]") && el.getClientRects().length > 0)); } catch (e) { check(`知らせの場所を数える画面を開ける：${sc.name}`, false, e.message); }
     await ctx.close();
   }
-  check("正解・まちがいなどの知らせを読み上げソフトに伝える場所がある（aria-live か role=status。WCAG 4.1.3）", live);
+  check("正解・まちがいなどの知らせを読み上げソフトに伝える場所がある（aria-live か role=status。aria-hidden・hidden の中は数えない。WCAG 4.1.3）", live);
 }
 {
   // 設定の画面が開き、選んだものが html の印になり、次に開いても残る
@@ -278,7 +292,15 @@ for (const sc of screens) {
   // 保存した値がオブジェクトでなくても、設定のボタンと window.A11y が動く
   await page.evaluate(() => localStorage.setItem("a11y-v1", "true"));
   await page.reload(); await page.waitForTimeout(300);
-  const odd = await page.evaluate(() => !!window.A11y && !!document.querySelector("[data-a11y-open]"));
+  let odd = await page.evaluate(() => !!window.A11y && !!document.querySelector("[data-a11y-open]"));
+  // ボタンがあるだけでなく、押すとダイアログが開くか（2026-11-07 mukashi-narabe #1 の CodeRabbit）
+  // 押せない（隠れている・時間切れ）ときも、例外で止めずに ✗ と数える（2026-11-07 amida-haitatsu #14 の CodeRabbit）
+  if (odd) {
+    await dismiss(page);
+    odd = await page.click("[data-a11y-open]", { timeout: 3000 })
+      .then(() => page.waitForSelector("dialog.a11y-dlg[open]", { timeout: 2000 }))
+      .then(() => true, () => false);
+  }
   check("保存した見やすさの設定が壊れていても（true など）、設定を開ける", odd);
   await ctx.close();
 }
