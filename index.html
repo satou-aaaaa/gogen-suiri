@@ -485,7 +485,7 @@ function tidy(s) {
   const okIds = (a) => Array.isArray(a) && a.every((x) => typeof x === "string" && x.length < 40);
   for (const m in s.runs) {
     const r = s.runs[m]; if (r === null) continue;
-    if (typeof r !== "object" || !okDate(r.date) || !Array.isArray(r.list) || !r.list.every(okTag) || !Array.isArray(r.res) || !r.res.every((x) => x && typeof x === "object" && Number.isInteger(x.m) && x.m >= 0)) { delete s.runs[m]; continue; }
+    if (typeof r !== "object" || !["d", "h", "p", "e", "a"].includes(r.mode) || runKey(r.mode, r.date) !== m || !okDate(r.date) || !Array.isArray(r.list) || !r.list.every(okTag) || !Array.isArray(r.res) || !r.res.every((x) => x && typeof x === "object" && Number.isInteger(x.m) && x.m >= 0)) { delete s.runs[m]; continue; }
     if (r.cur != null && (typeof r.cur !== "object" || !okIds(r.cur.wrong) || (r.cur.got != null && !okIds(r.cur.got)))) r.cur = null; else if (r.cur) r.cur.hints = num(r.cur.hints);
   }
   return s;
@@ -626,6 +626,13 @@ const same = (r) => r && cur && r.date === cur.date && r.id === cur.id && r.res.
 // 途中の保存：別のタブで使ったヒント・まちがい・置いたパーツも減らさない（多いほう・合わせたほうを残す）
 function keep() { save((s) => { const r = s.runs[MODE]; if (!same(r)) return; const was = r.cur && r.cur.i === cur.i && r.cur.tag === cur.tag ? r.cur : { wrong: [], got: [], hints: 0 }; cur.hints = Math.max(cur.hints, was.hints || 0); for (const w of was.wrong || []) if (!cur.wrong.includes(w)) cur.wrong.push(w); for (const g of was.got || []) if (!cur.got.includes(g) && cur.P.ans.includes(g)) cur.got.push(g); r.cur = { i: cur.i, tag: cur.tag, wrong: cur.wrong.slice(), got: cur.got.slice(), hints: cur.hints }; }); }
 const missOf = () => cur.wrong.length + cur.hints;
+// あとからの回：開いたまま期限（過去7日）を過ぎたら、答えを受け付けない
+function stale() {
+  const s = load(), r = s.runs[MODE];
+  if (!same(r)) { toast("別の画面で先に進んでいます"); play(); return true; }
+  if (r.mode === "a" && !lateDays(s).includes(r.date)) { save((s2) => { if (same(s2.runs[MODE])) s2.runs[MODE] = null; }); toast("この日は、あとから遊べる期間を過ぎました"); home(); return true; }
+  return false;
+}
 const isB = () => cur && cur.P.kind === "b1";
 function play() {
   let s = load(), run = s.runs[MODE];
@@ -705,14 +712,14 @@ function wrongAt(x, msg) {
 function choose(j) {
   if (cur.done) return;
   const t = cur.P.opts[j];
-  if (!same(load().runs[MODE])) { toast("別の画面で先に進んでいます"); return play(); }
+  if (stale()) return;
   if (t !== cur.P.ans) { if (cur.wrong.includes(t)) return; return wrongAt(t, "✕ ちがいます。パーツの意味をもう一度つなげてみましょう。"); }
   solved();
 }
 function pickCard(j) {
   if (cur.done) return;
   const id = cur.P.cards[j];
-  if (!same(load().runs[MODE])) { toast("別の画面で先に進んでいます"); return play(); }
+  if (stale()) return;
   if (cur.got.includes(id) || cur.wrong.includes(id)) return;
   if (!cur.P.ans.includes(id)) return wrongAt(id, `✕ 「${G.pm(id)}」はこの単語に入っていません。`);
   cur.got.push(id); buzz(10);
@@ -721,8 +728,15 @@ function pickCard(j) {
 }
 function solved() {
   cur.done = true; buzz([10, 40, 10]);
-  const m = missOf(), st = starsOf(m), P = cur.P, w = P.w;
-  const s = save((s) => { const r = s.runs[MODE]; if (!same(r)) return; r.res.push({ m }); r.cur = null; s.dex[w.i] = (s.dex[w.i] || 0) + 1; });
+  const P = cur.P, w = P.w;
+  // 別のタブで使ったヒント・まちがいも合わせてから数える（正解した画面の分だけで★を決めない）
+  const s = save((s) => {
+    const r = s.runs[MODE]; if (!same(r)) return;
+    const was = r.cur && r.cur.i === cur.i && r.cur.tag === cur.tag ? r.cur : null;
+    if (was) { cur.hints = Math.max(cur.hints, Math.min(was.hints || 0, 2)); for (const x of was.wrong || []) if (!cur.wrong.includes(x)) cur.wrong.push(x); }
+    r.res.push({ m: missOf() }); r.cur = null; s.dex[w.i] = (s.dex[w.i] || 0) + 1;
+  });
+  const m = missOf(), st = starsOf(m);
   const r = s.runs[MODE], fin = r && r.mode !== "e" && r.res.length >= r.list.length;
   if (isB()) paint();
   else { $("word").innerHTML = segHtml(w, false); document.querySelectorAll(".ch").forEach((b) => { b.disabled = true; if (P.opts[+b.dataset.j] === P.ans) b.classList.add("ok"); }); }
@@ -737,7 +751,7 @@ function solved() {
     <p class="src"><a href="${ETY(w)}" target="_blank" rel="noopener">出典：Online Etymology Dictionary</a></p>
     <button class="main ok" id="next">${fin ? "結果を見る" : "次の問題へ"}</button></div>`;
   $("next").onclick = play;
-  setTimeout(() => { if ($("next") && cur && cur.done && cur.tag === P.tag) $("next").scrollIntoView({ behavior: "smooth", block: "nearest" }); }, 60);
+  setTimeout(() => { if ($("next") && cur && cur.done && cur.tag === P.tag) $("next").scrollIntoView({ behavior: window.A11y && A11y.on("calm") ? "auto" : "smooth", block: "nearest" }); }, 60);
 }
 
 function finish() {

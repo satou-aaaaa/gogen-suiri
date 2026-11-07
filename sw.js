@@ -26,14 +26,17 @@ self.addEventListener("fetch", (e) => {
   const net = fetch(req);
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   e.waitUntil(Promise.race([net.then((res) => { if (!res.ok) return; const copy = res.clone(); return Promise.race([caches.open(CACHE).then((c) => c.put(req, copy)), wait(15000)]); }, () => {}).catch(() => {}), wait(60000)])); // 保存の失敗は無視する。保存は始めてから15秒、全体は60秒で待つのをやめる（遅い通信でも保存でき、次の版の切り替えも止めない）
+  // 4秒で保存したものに切り替える。本文を受け取り終えるまで切り替えを待ち（頭だけ届いて止まる通信でも開ける）、
+  // 保存も無く通信も返らないときは20秒でエラーを返す（いつまでも待たせない）
   e.respondWith(new Promise((resolve) => {
-    let sent = false; const send = (r) => { if (!sent) { sent = true; resolve(r); } };
+    let sent = false; const send = (r) => { if (!sent) { sent = true; clearTimeout(slow); clearTimeout(give); resolve(r); } };
     const slow = setTimeout(() => fromCache().then((hit) => hit && send(hit)), 4000);
+    const give = setTimeout(() => fromCache().then((hit) => send(hit || Response.error())), 20000);
+    const fail = (res) => fromCache().then((hit) => send(hit || res || Response.error()));
     net.then((res) => {
-      clearTimeout(slow);
-      if (res.ok) return send(res);
-      if (res.status >= 500) return fromCache().then((hit) => send(hit || res));
+      if (res.ok) return res.clone().arrayBuffer().then(() => send(res), () => fail());
+      if (res.status >= 500) return fail(res);
       send(res);
-    }, () => { clearTimeout(slow); fromCache().then((hit) => send(hit || Response.error())); });
+    }, () => fail());
   }));
 });

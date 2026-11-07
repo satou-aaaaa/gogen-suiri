@@ -41,8 +41,9 @@ const { PARTS, WORDS } = G;
     for (let s = 0; s < 6; s++) {
       const P = G.make(`${k.id}|${w.i}|s${s}`); n++;
       if (k.id === "b1") {
-        const means = P.cards.map((c) => G.pm(c));
-        if (P.cards.length !== 6 || new Set(P.cards).size !== 6 || new Set(means).size !== 6 || P.ans.some((a) => !P.cards.includes(a)) || P.ans.join() !== G.idsOf(w).join()) bad.push(`${w.w}/b1`);
+        const means = P.cards.map((c) => G.pm(c)), words = P.cards.flatMap((c) => G.pm(c).split("・"));
+        // 意味のことばが1つでも重なる札は置かない（ultra「こえて」に super「上に・こえて」を並べない）
+        if (P.cards.length !== 6 || new Set(P.cards).size !== 6 || new Set(means).size !== 6 || new Set(words).size !== words.length || P.ans.some((a) => !P.cards.includes(a)) || P.ans.join() !== G.idsOf(w).join()) bad.push(`${w.w}/b1`);
         const ao = P.ans.map((c) => PARTS[c][1]), dOk = P.cards.filter((c) => !P.ans.includes(c)).map((c) => PARTS[c][1]);
         if (dOk.every((o) => !ao.includes(o))) give.push(w.w);
       } else {
@@ -55,6 +56,18 @@ const { PARTS, WORDS } = G;
     }
   }
   check(`問題：どの単語・種類でも、答えが1つ・選び肢と札がちがう（${n}問を作って確かめる）`, bad.length === 0, [...new Set(bad)].slice(0, 8).join(","));
+  {
+    // DAILY_N の後ろに単語を足しても、今日の5問・上級の問題（見やぶりにできるか・札・選び肢）は変わらない
+    const req = createRequire(import.meta.url), dp = path.join(root, "data.js"), gp = path.join(root, "gen.js");
+    const days = Array.from({ length: 120 }, (_, d) => new Date(Date.parse(G.EPOCH) + d * 864e5).toISOString().slice(0, 10));
+    const shot = (g) => days.map((k) => [...g.dailyTags(k), ...g.hardTags(k)].map((t) => { const P = g.make(t); return t + "=" + (P.opts || P.cards).join("/"); }).join(";")).join("\n");
+    const before = shot(G), D = req(dp), n0 = D.WORDS.length;
+    // 今日の5問の語とパーツを使い回す単語を2つ足す（見やぶりの数え方と、頭・おしりの数え方が動くはず）
+    for (const w of D.WORDS.slice(0, 2)) D.WORDS.push({ i: D.WORDS.length, w: w.w + "x", segs: w.segs.slice().reverse(), ja: "テスト" + D.WORDS.length, d: "テスト", c: w.c, note: "" });
+    delete req.cache[gp]; const G2 = req(gp), after = shot(G2);
+    D.WORDS.length = n0; delete req.cache[gp];
+    check("DAILY_N の後ろに単語を足しても、今日の5問・上級の問題は変わらない（120日分）", before === after);
+  }
   check("組み立て：札の色（生まれた言葉）だけで答えが分からない（まぎらわしい札に答えと同じ言葉の札がある）", give.length === 0, [...new Set(give)].slice(0, 8).join(","));
   const same = ["telephone", "dinosaur", "transport"].every((x) => { const w = WORDS.find((y) => y.w === x); return JSON.stringify(G.make(`g0|${w.i}|z`)) === JSON.stringify(G.make(`g0|${w.i}|z`)); });
   check("同じ札なら同じ問題（種から作る）", same);
@@ -70,13 +83,15 @@ const { PARTS, WORDS } = G;
     const k = new Date(start + d * 864e5).toISOString().slice(0, 10);
     const t = G.dailyTags(k), h = G.hardTags(k), ws = t.map((x) => +x.split("|")[1]), hw = h.map((x) => +x.split("|")[1]);
     if (t.length !== 5 || new Set(ws).size !== 5 || h.length !== 3 || new Set(hw).size !== 3 || hw.some((w) => ws.includes(w))) bad.push(k);
-    if (t.filter((x) => x.startsWith("g0")).length < 2 || t.filter((x) => x.startsWith("b1")).length !== 2) bad.push(k + "/kinds");
+    // 日ごとの種類：見やぶりにできる語がある日は 意味あて2・組み立て2・見やぶり1、無い日だけ 意味あて3・組み立て2。上級は見やぶり3
+    const kn = (p) => t.filter((x) => x.startsWith(p)).length, can = ws.some((w) => G.canHide(G.WORDS[w]));
+    if (kn("b1") !== 2 || kn("g0") !== (can ? 2 : 3) || kn("g2") !== (can ? 1 : 0) || !h.every((x) => x.startsWith("g2|"))) bad.push(k + "/kinds");
     if (!t[4].startsWith("g2")) noHard++;
     if (![...t, ...h].every((x) => { try { G.make(x); return true; } catch { return false; } })) bad.push(k + "/make");
     if (ws.some((w) => w >= G.DAILY_N) || hw.some((w) => w >= G.DAILY_N)) bad.push(k + "/n");
     if (d < Math.floor(G.DAILY_N / 5)) for (const w of ws) { if (seenCycle.has(w)) dup++; seenCycle.set(w, k); }
   }
-  check("今日の5問（意味あて2〜3・組み立て2・見やぶり0〜1）と上級（見やぶり3・今日と重ならない）を3年分作れる", bad.length === 0, bad.slice(0, 5).join(","));
+  check("今日の5問（意味あて2・組み立て2・見やぶり1。見やぶりにできる語が無い日だけ意味あて3）と上級（見やぶり3・今日と重ならない）を3年分作れる", bad.length === 0, bad.slice(0, 5).join(","));
   check("今日の5問の5問目はほとんどの日で見やぶり（ない日は3年で30日まで）", noHard <= 30, `${noHard}日`);
   check(`今日の5問は、はじめの${Math.floor(G.DAILY_N / 5)}日で同じ単語を出さない（全部を一回りしてから次の周）`, dup === 0, dup);
   // 過去の日の問題が変わらない（data.js・gen.js を変えたら、ここの値が変わる。変えるなら PR に理由を書く）
@@ -109,6 +124,8 @@ check("README の URL のすぐ後ろに全角の字を続けない（Link check
   const shell = JSON.parse(sw.match(/SHELL = (\[[^\]]+\])/)[1]);
   check("PWA：sw.js は画面のファイルを全部保存し（引き継ぎの transfer.js も）、外へ何も送らない", ["./index.html", "./data.js", "./gen.js", "./transfer.js", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"].every((f) => shell.includes(f)) && !/https?:\/\//.test(sw.replace(/^\/\/.*$/gm, "")));
   check("PWA：sw.js は install で取り直す（cache: reload）", /cache: "reload"/.test(sw));
+  check("PWA：本文を受け取り終えるまで保存したものへの切り替えを待ち、保存も通信も無いときは20秒でエラーを返す", /arrayBuffer\(\)\.then\(\(\) => send\(res\)/.test(sw) && /setTimeout\([^;]*Response\.error\(\)[^;]*20000\)/.test(sw));
+  check("「動きを減らす」のときは、すべるスクロールにしない", !/behavior: "smooth"/.test(html) && /A11y\.on\("calm"\) \? "auto" : "smooth"/.test(html));
   check("PWA：manifest にアイコン2つと名前がある", mf.name === "語源すいり" && mf.icons.length >= 2 && mf.start_url === "./"); }
 
 // ---- 3. ブラウザで遊ぶ ----
@@ -121,10 +138,13 @@ const server = createServer((req, res) => {
 const url = `http://127.0.0.1:${server.address().port}/`;
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const errors = [];
-const TODAY = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+// QA の間は、ブラウザの時計を始めた時刻に止める（日本時間の0時をまたいでも、TODAY とゲームの「今日」がずれない）
+const START = Date.now();
+const TODAY = new Date(START + 9 * 3600e3).toISOString().slice(0, 10);
 const dayBefore = (n) => new Date(Date.parse(TODAY) - n * 864e5).toISOString().slice(0, 10);
 async function newPage(w = 390, ctx) {
   const c = ctx || await browser.newContext({ viewport: { width: w, height: 800 } });
+  if (!ctx) await c.clock.setFixedTime(START);
   await c.route(/fonts\.(googleapis|gstatic)\.com/, (r) => r.abort());
   const p = await c.newPage();
   p.on("pageerror", (e) => errors.push(e.message));
@@ -280,10 +300,10 @@ try {
     const total = G.KINDS.reduce((a, k) => a + G.combos(k.id).length, 0);
     check("とことんの並び（300回）：同じ組を出さない・同じ単語を続けない・前の並びの最後の単語から始めない・全部の組が入る", r.bad.length === 0 && r.len === total, `${r.bad.slice(0, 5).join(",")} 長さ${r.len}/${total}`);
     // 記録の形を直す：細工した値を画面に HTML として出さない
-    await q.evaluate(() => { const s = JSON.parse(localStorage.getItem("gogen-v1")) || { v: 1 }; s.ebest = '<img id="xss" src=x>'; s.dex = { 3: '"><b id="xss2">', constructor: 1, 99999: 1 }; s.runs = { h: { list: "bad", res: [] }, p: { mode: "p", id: "y", date: "2026-11-07", list: ["constructor|1|x"], res: [] }, d: { mode: "d", id: "z", date: "x", list: ["g0|1|x"], res: [] }, a1: { mode: "a", id: "a1", date: "2026-11-07", list: ["g0|1|x", "g0|2|x"], res: [{ m: 0 }], cur: { i: 1, tag: "g0|2|x", wrong: "x", hints: 0 } }, e: { mode: "e", id: "e", date: "2026-11-07", list: ["b1|2|x", "g0|99999|x"], res: [] } }; s.days = { "2026-11-07": { m: "x" }, bad: { m: [0] }, "2026-02-30": { m: [0] } }; localStorage.setItem("gogen-v1", JSON.stringify(s)); });
+    await q.evaluate(() => { const s = JSON.parse(localStorage.getItem("gogen-v1")) || { v: 1 }; s.ebest = '<img id="xss" src=x>'; s.dex = { 3: '"><b id="xss2">', constructor: 1, 99999: 1 }; s.runs = { h: { list: "bad", res: [] }, p: { mode: "p", id: "y", date: "2026-11-07", list: ["constructor|1|x"], res: [] }, d: { mode: "d", id: "z", date: "x", list: ["g0|1|x"], res: [] }, "a:2026-11-07": { mode: "a", id: "a1", date: "2026-11-07", list: ["g0|1|x", "g0|2|x"], res: [{ m: 0 }], cur: { i: 1, tag: "g0|2|x", wrong: "x", hints: 0 } }, e: { mode: "e", id: "e", date: "2026-11-07", list: ["b1|2|x", "g0|99999|x"], res: [] }, x: { id: "x", date: "2026-11-07", list: ["g0|1|x"], res: [{ m: 0 }] }, "a:2026-11-01": { mode: "d", id: "w", date: "2026-11-07", list: ["g0|1|x"], res: [] } }; s.days = { "2026-11-07": { m: "x" }, bad: { m: [0] }, "2026-02-30": { m: [0] } }; localStorage.setItem("gogen-v1", JSON.stringify(s)); });
     await q.reload(); await q.waitForTimeout(250);
     const st = await q.evaluate(() => __gg.load());
-    check("記録の形を直す：数の所の文字は0に・知らない単語・形のちがう途中経過と日ごとの記録は捨てる", st.ebest === 0 && st.dex[3] === 0 && !Object.hasOwn(st.dex, "constructor") && !Object.hasOwn(st.dex, "99999") && !("h" in st.runs) && !("p" in st.runs) && !("d" in st.runs) && !("e" in st.runs) && st.runs.a1 && st.runs.a1.cur === null && Object.keys(st.days).length === 0, JSON.stringify(st).slice(0, 380));
+    check("記録の形を直す：数の所の文字は0に・知らない単語・形のちがう途中経過（モードの無いもの・置き場所とモードが合わないものも）と日ごとの記録は捨てる", st.ebest === 0 && st.dex[3] === 0 && !Object.hasOwn(st.dex, "constructor") && !Object.hasOwn(st.dex, "99999") && !("h" in st.runs) && !("p" in st.runs) && !("d" in st.runs) && !("e" in st.runs) && !("x" in st.runs) && !("a:2026-11-01" in st.runs) && st.runs["a:2026-11-07"] && st.runs["a:2026-11-07"].cur === null && Object.keys(st.days).length === 0, JSON.stringify(st).slice(0, 380));
     await q.click("#go-dex").catch(() => {}); await q.waitForTimeout(150);
     check("記録の文字を HTML として出さない", await q.locator("#xss, #xss2").count() === 0);
     await q.context().close();
@@ -323,9 +343,35 @@ try {
     await q.context().close();
   }
 
+  // 別のタブでヒントを使ったあと、この画面で正解しても、そのヒントを★に入れる
+  {
+    const q = await newPage(); await closeHow(q); await q.click("#go-h");
+    await q.evaluate(() => { const s = JSON.parse(localStorage.getItem("gogen-v1")); const r = s.runs.h; r.cur = { i: 0, tag: r.list[0], wrong: [], got: [], hints: 2 }; localStorage.setItem("gogen-v1", JSON.stringify(s)); });
+    await solve(q);
+    check("別のタブで使ったヒントも、正解したときの★に入れる（★3にしない）", (await q.evaluate(() => __gg.load().runs.h.res[0].m)) >= 2 && !(await q.textContent(".verdict .hd")).includes("★★★"));
+    await q.context().close();
+  }
+  // あとから：開いたまま期限（過去7日）を過ぎたら、答えを受け付けずホームへ
+  {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const later = START + 3 * 864e5; await ctx.clock.setFixedTime(later);
+    const q = await newPage(390, ctx); await closeHow(q);
+    const d = await q.evaluate(() => __gg.lateDays(__gg.load())[0]);
+    if (d) {
+      await q.click("#go-cal"); await q.click(`.cal .miss[data-k="${d}"]`);
+      await ctx.clock.setFixedTime(later + 9 * 864e5);
+      const c = await curOf(q);
+      if (c.kind === "b1") await q.click(`.card[data-j="${c.cards.indexOf(c.ans[0])}"]`); else await q.click(`.ch[data-j="${c.opts.indexOf(c.ans)}"]`);
+      await q.waitForTimeout(150);
+      check("あとから：開いたまま期限を過ぎたら答えを受け付けない（記録に入れず、途中経過も消す）", !(await q.evaluate((d) => __gg.load().adays[d], d)) && !(await q.evaluate((d) => __gg.load().runs["a:" + d], d)) && await q.locator("#go-d").count() === 1);
+    } else check("あとから：期限の検査に使う日がある", false);
+    await ctx.close();
+  }
+
   // 古いタブ：同じ問題を2つのタブで開き、片方で答えたら、もう片方は二重に入れない
   {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    await ctx.clock.setFixedTime(START);
     const a = await newPage(390, ctx); await closeHow(a); await a.click("#go-d");
     const b = await ctx.newPage(); b.on("pageerror", (e) => errors.push(e.message)); await b.goto(url); await b.waitForTimeout(150); await b.click("#go-d");
     await solve(a);
@@ -363,6 +409,7 @@ try {
   // 見やすさの設定を全部入れても、ページの一番下まで動ける
   {
     const ctx = await browser.newContext({ viewport: { width: 390, height: 700 } });
+    await ctx.clock.setFixedTime(START);
     await ctx.addInitScript(() => localStorage.setItem("a11y-v1", JSON.stringify({ read: true, cvd: true, calm: true, say: true, ruby: true })));
     const q = await newPage(390, ctx); await closeHow(q);
     const r = await q.evaluate(() => { window.scrollTo(0, 1e5); const f = document.querySelector("footer").getBoundingClientRect(); return [scrollY, Math.round(f.bottom), innerHeight, getComputedStyle(document.documentElement).position]; });

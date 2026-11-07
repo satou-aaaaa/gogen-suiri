@@ -27,12 +27,16 @@
   const mset = (w) => idsOf(w).map(pm).sort().join("/");
   // パーツを使う単語の数（見やぶりは、どのパーツもほかの単語で出会えるものだけ）
   const poolOf = (i) => (i < DAILY_N ? WORDS.slice(0, DAILY_N) : WORDS);
-  const USE = {};
-  for (const w of WORDS) for (const id of new Set(idsOf(w))) USE[id] = (USE[id] || 0) + 1;
-  const canHide = (w) => idsOf(w).every((id) => USE[id] >= 2);
+  // 数えるのは、その単語の pool の中だけ（DAILY_N の後ろに単語を足しても、今日の5問・上級の問題は変わらない）
+  const countUse = (ws) => { const u = {}; for (const w of ws) for (const id of new Set(idsOf(w))) u[id] = (u[id] || 0) + 1; return u; };
   // パーツが単語の頭・おしりに来るか（組み立ての、まぎらわしい札を選ぶのに使う）
-  const POS = {};
-  for (const w of WORDS) w.segs.forEach(([, id], j) => { const p = (POS[id] = POS[id] || { h: 0, t: 0 }); if (j === 0) p.h++; if (j === w.segs.length - 1) p.t++; });
+  const countPos = (ws) => { const o = {}; for (const w of ws) w.segs.forEach(([, id], j) => { const p = (o[id] = o[id] || { h: 0, t: 0 }); if (j === 0) p.h++; if (j === w.segs.length - 1) p.t++; }); return o; };
+  const DUSE = countUse(WORDS.slice(0, DAILY_N)), USE = countUse(WORDS);
+  const DPOS = countPos(WORDS.slice(0, DAILY_N)), APOS = countPos(WORDS);
+  const useOf = (i) => (i < DAILY_N ? DUSE : USE), posOf = (i) => (i < DAILY_N ? DPOS : APOS);
+  const canHide = (w) => idsOf(w).every((id) => useOf(w.i)[id] >= 2);
+  // 意味のことば（「上に・こえて」なら 上に／こえて）。1つでも重なる札は、まぎらわしい札にしない
+  const words = (id) => pm(id).split("・");
 
   // 「tele（遠く）＋ scope（見る）」
   const breakdown = (w) => w.segs.map(([t, id]) => `${t}（${pm(id)}）`).join(" ＋ ");
@@ -44,19 +48,19 @@
     const P = { tag, kind, lv: K.lv, name: K.name, w, why: breakdown(w) + " ＝ " + w.d, note: w.note };
     if (kind === "b1") {
       // 正しいパーツと、意味が重ならないまぎらわしいパーツ（頭・おしりの位置が同じものを先に）で、札を6枚
-      const want = idsOf(w), means = new Set(want.map(pm)), ids = [...new Set(pool.flatMap(idsOf))];
-      const okD = ids.filter((id) => !want.includes(id) && !means.has(pm(id)));
-      const out = [], used = new Set(means);
+      const want = idsOf(w), means = new Set(want.flatMap(words)), ids = [...new Set(pool.flatMap(idsOf))], POS = posOf(w.i);
+      const okD = ids.filter((id) => !want.includes(id) && !words(id).some((x) => means.has(x)));
+      const out = [], used = new Set(means), clash = (x) => words(x).some((y) => used.has(y)), take = (x) => words(x).forEach((y) => used.add(y));
       const need = 6 - want.length;
       want.forEach((id, j) => {
         const per = Math.ceil(need / want.length), head = j === 0, tail = j === want.length - 1;
         // 生まれた言葉（札の色・印）が同じものを先に。色で答えが分からないように
         const posOk = (x) => (head ? POS[x].h : 0) || (tail ? POS[x].t : 0) || (!head && !tail), og = PARTS[id][1];
         const near = [...shuffle(R, okD.filter((x) => posOk(x) && PARTS[x][1] === og)), ...shuffle(R, okD.filter((x) => posOk(x) && PARTS[x][1] !== og))];
-        for (const x of near) { if (out.length >= need || out.filter((y) => y.j === j).length >= per) break; if (!used.has(pm(x))) { used.add(pm(x)); out.push({ id: x, j }); } }
+        for (const x of near) { if (out.length >= need || out.filter((y) => y.j === j).length >= per) break; if (!clash(x)) { take(x); out.push({ id: x, j }); } }
       });
       const ogs = want.map((id) => PARTS[id][1]);
-      for (const x of [...shuffle(R, okD.filter((x) => ogs.includes(PARTS[x][1]))), ...shuffle(R, okD)]) { if (out.length >= need) break; if (!used.has(pm(x))) { used.add(pm(x)); out.push({ id: x, j: -1 }); } }
+      for (const x of [...shuffle(R, okD.filter((x) => ogs.includes(PARTS[x][1]))), ...shuffle(R, okD)]) { if (out.length >= need) break; if (!clash(x)) { take(x); out.push({ id: x, j: -1 }); } }
       P.ans = want; P.cards = shuffle(R, [...want, ...out.map((o) => o.id)]);
       P.look = `最初のパーツは「${pm(want[0])}」という意味です。`;
       return P;
@@ -77,10 +81,14 @@
   const dayIndex = (date) => Math.round((Date.parse(date) - Date.parse(EPOCH)) / 864e5);
   const cyc = {};
   const cycle = (c) => cyc[c] || (cyc[c] = shuffle(rng(seedOf("cycle:" + c)), [...Array(DAILY_N).keys()]));
+  // 周のつなぎ目で同じ語が重なったら、その日のぶんは新しい周のおしりから借りる（次の日の位置を食わないので、2日続けて同じ語は出ない）
   function dailyWords(date) {
     const n = Math.max(0, dayIndex(date)), out = [];
-    let p = n * 5;
-    while (out.length < 5) { const c = Math.floor(p / DAILY_N), w = cycle(c)[p % DAILY_N]; if (!out.includes(w)) out.push(w); p++; }
+    for (let p = n * 5; p < n * 5 + 5; p++) {
+      const c = Math.floor(p / DAILY_N); let w = cycle(c)[p % DAILY_N];
+      for (let k = DAILY_N - 1; out.includes(w); k--) w = cycle(c)[k];
+      out.push(w);
+    }
     return out;
   }
   // 5語のうち、見やぶりにできる最後の1語をむずかしいに。残りを前から意味あて2・組み立て2
@@ -101,7 +109,7 @@
   // 練習・とことんで出せる組（種類と単語）。見やぶりは canHide の語だけ
   const combos = (kind) => WORDS.filter((w) => kind !== "g2" || canHide(w)).map((w) => w.i);
 
-  const GOGEN = { PARTS, WORDS, ORIGIN, CATS, KINDS, BY, LV, DAILY_N, EPOCH, USE, seedOf, rng, shuffle, pickN, make, dailyWords, dailyTags, hardTags, canHide, combos, breakdown, pm, idsOf };
+  const GOGEN = { PARTS, WORDS, ORIGIN, CATS, KINDS, BY, LV, DAILY_N, EPOCH, USE, useOf, seedOf, rng, shuffle, pickN, make, dailyWords, dailyTags, hardTags, canHide, combos, breakdown, pm, idsOf };
   if (typeof module !== "undefined" && module.exports) module.exports = GOGEN;
   else root.GOGEN = GOGEN;
 })(typeof self !== "undefined" ? self : this);
