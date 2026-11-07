@@ -153,6 +153,16 @@ try {
   const p = await newPage();
   check("はじめて開くと遊び方が出る", await p.locator("#howto[open]").count() === 1);
   await p.click("#howto-ok");
+  {
+    // Esc で閉じても「見た」が残り、開き直しても遊び方が出ない（shared-workflows #186。ボタンでしか保存していなかった）
+    const q = await newPage();
+    await q.waitForSelector("#howto[open]");
+    await q.keyboard.press("Escape");
+    await q.waitForTimeout(100);
+    await q.reload(); await q.waitForSelector("#go-d");
+    check("遊び方を Esc で閉じたあと、開き直しても遊び方が出ない", (await q.evaluate(() => __gg.load().tut)) === true && await q.locator("#howto[open]").count() === 0);
+    await q.context().close();
+  }
   check("ホームに今日のコツが出る", (await p.textContent("#tip")).includes("今日のコツ"));
   check("上級・とことん・練習は、はじめての日から押せる（鍵なし）", await p.locator("#go-h:not([disabled])").count() === 1 && await p.locator("#go-e:not([disabled])").count() === 1 && await p.locator("#go-p:not([disabled])").count() === 1);
   await p.click("#go-d");
