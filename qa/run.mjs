@@ -157,11 +157,22 @@ try {
     // Esc で閉じても「見た」が残り、開き直しても遊び方が出ない（shared-workflows #186。ボタンでしか保存していなかった）
     const q = await newPage();
     await q.waitForSelector("#howto[open]");
-    await q.keyboard.press("Escape");
-    await q.waitForTimeout(100);
+    let bad = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = i ? await newPage() : q;
+      await r.waitForSelector("#howto[open]");
+      await r.keyboard.press("Escape");
+      if (!(await r.evaluate(() => __gg.load().tut))) bad++;   // 押したその場（すぐ読み直す）
+      if (i) await r.context().close();
+    }
     await q.reload(); await q.waitForSelector("#go-d");
-    check("遊び方を Esc で閉じたあと、開き直しても遊び方が出ない", (await q.evaluate(() => __gg.load().tut)) === true && await q.locator("#howto[open]").count() === 0);
+    check("遊び方を Esc で閉じてすぐ読み直しても「見た」が残る（10回）・開き直しても出ない", bad === 0 && await q.locator("#howto[open]").count() === 0);
     await q.context().close();
+    const o = await newPage();
+    await o.waitForSelector("#howto[open]");
+    await o.click("#howto-ok");
+    check("「はじめる」を押したその場で「見た」が残る", await o.evaluate(() => __gg.load().tut) === true);
+    await o.context().close();
   }
   check("ホームに今日のコツが出る", (await p.textContent("#tip")).includes("今日のコツ"));
   check("上級・とことん・練習は、はじめての日から押せる（鍵なし）", await p.locator("#go-h:not([disabled])").count() === 1 && await p.locator("#go-e:not([disabled])").count() === 1 && await p.locator("#go-p:not([disabled])").count() === 1);

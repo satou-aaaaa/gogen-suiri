@@ -549,8 +549,9 @@ const ETY = (w) => `https://www.etymonline.com/word/${encodeURIComponent(w.w)}`;
 const footer = () => `<footer><a href="#" id="f-how">遊び方</a><a href="#" id="f-about">このゲームについて</a><a href="#" data-a11y-open>見やすさ</a><a href="#" data-hk>引き継ぎ</a><a href="${FEEDBACK}" target="_blank" rel="noopener">感想を送る</a><a href="https://ko-fi.com/satouaaaaa" target="_blank" rel="noopener">Ko-fi で応援</a></footer>`;
 function bindFooter() { const h = $("f-how"); if (h) h.onclick = (e) => { e.preventDefault(); openHow(); }; const a = $("f-about"); if (a) a.onclick = (e) => { e.preventDefault(); about(); }; }
 function openHow() { $("fb2").href = FEEDBACK; const d = $("howto"); if (d.showModal) d.showModal(); else d.setAttribute("open", ""); }
-$("howto-ok").onclick = () => { const d = $("howto"); d.close ? d.close() : d.removeAttribute("open"); save((s) => { s.tut = true; }); };
+$("howto-ok").onclick = () => { save((s) => { s.tut = true; }); const d = $("howto"); d.close ? d.close() : d.removeAttribute("open"); };
 // Esc で閉じても「見た」を残す（ボタンだけで保存すると、ホームへ戻るたびにまた開く）
+$("howto").addEventListener("cancel", () => { if (!load().tut) save((s) => { s.tut = true; }); });   // Esc を押したその場で届く
 $("howto").addEventListener("close", () => { if (!load().tut) save((s) => { s.tut = true; }); });
 
 function home() {

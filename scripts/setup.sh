@@ -4,10 +4,13 @@
 # Claude Code のクラウドセッションでは .claude/settings.json の SessionStart フックが自動で呼ぶ。
 # CI の Setup check（共通部品）が、まっさらな環境でこれが通るかを確かめる。
 # ひな形: satou-aaaaa/shared-workflows の template/scripts/setup.sh。（Python の節は使わないので消した）
-# ひな形の版: 4（上げたら写しの版も上げる。scripts/drift-check.mjs が古い写しを週次まとめに出す）
+# ひな形の版: 5（上げたら写しの版も上げる。scripts/drift-check.mjs が古い写しを週次まとめに出す）
 #   2: 依存は毎回 npm ci・ブラウザが無ければ止める・このシェルで要る操作（nvm use・export）を最後に出す（shared-workflows incidents/2026-11-03-setup-false-ready.md）
 #   3: nvm.sh を --no-use で読む（.nvmrc の版が入っていないと、読んだだけで何も言わずに止まっていた。incidents/2026-11-04-setup-nvm-silent-stop.md）
 #   4: ブラウザの場所はファイルかも見る（-x だけだとフォルダでも通った。2026-11-05 CodeRabbit が bunshi-tsukuri #1 で指摘）
+#   5: 依存は lock と Node の版が同じで npm ls が通れば入れ直さない（QA の最中に npm ci が node_modules を消していた）・
+#      渡すブラウザの場所を空白があっても切れないよう引用する・最後にブラウザを本当に起動してみる（Linux のライブラリ不足・
+#      合わない版・ダウンロード後の CHROMIUM_PATH を見逃していた）・nvm use の前に nvm.sh を読み込む案内を出す（incidents/2026-11-07-game-template-review-gaps.md）
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -20,6 +23,7 @@ todo=()
 session_env() {
   if [ -n "${CLAUDE_ENV_FILE:-}" ]; then echo "export $1" >> "$CLAUDE_ENV_FILE"; else todo+=("export $1"); fi
 }
+q() { printf '%q' "$1"; }   # シェルにそのまま貼れる形にする（空白のある場所で切れないように。版5）
 
 npm_dir=qa
 
@@ -34,15 +38,23 @@ if ! node_ok; then
     set +u; export NVM_DIR; . "$NVM_DIR/nvm.sh" --no-use; nvm install "$want" >/dev/null; set -u
     if node_ok; then
       # nvm の切り替えはこのスクリプトの中だけに効く（親のシェルは古い Node のまま）
-      if [ -n "${CLAUDE_ENV_FILE:-}" ]; then session_env "PATH=\"$(dirname "$(command -v node)"):\$PATH\""; else todo+=("nvm use $want"); fi
+      if [ -n "${CLAUDE_ENV_FILE:-}" ]; then session_env "PATH=\"$(dirname "$(command -v node)"):\$PATH\""; else todo+=(". $(q "$NVM_DIR/nvm.sh") && nvm use $want"); fi   # nvm はシェルの関数なので、先に読み込む（新しいシェルには無い。版5）
     fi
   fi
 fi
 node_ok || fail "Node.js $want 以上が要る（今は $(node -v 2>/dev/null || echo なし)。https://nodejs.org/ か、nvm・fnm で .nvmrc の版を入れる）"
 
-# npm の依存。毎回 lock から入れ直す（npm ci は node_modules を消して入れ直す。数秒で終わる）。
-# 日付だけで飛ばすと、消えた・別の版に替わった node_modules を見逃す（v1 の穴）
-(cd "$npm_dir" && npm ci --no-audit --no-fund)
+# npm の依存。lock と Node の版が前に入れたときと同じで、入っている木が lock どおり（npm ls が通る）なら入れ直さない。
+# 日付だけで飛ばすと、消えた・別の版に替わった node_modules を見逃す（v1 の穴）。npm ls はそれを見つける。
+# 毎回 npm ci すると、QA の最中に node_modules を消して QA を落とす（版5）。QA を回している間は、このスクリプトを動かさない
+stamp="$npm_dir/node_modules/.setup-stamp"
+sum=$( { node -v; cat "$npm_dir/package-lock.json"; } | cksum )
+if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$sum" ] && (cd "$npm_dir" && npm ls --all >/dev/null 2>&1); then
+  echo "依存は lock どおりに入っている（入れ直さない）"
+else
+  (cd "$npm_dir" && npm ci --no-audit --no-fund)
+  echo "$sum" > "$stamp"
+fi
 
 # Playwright のブラウザ。検査は CHROMIUM_PATH があればそれを、無ければ Playwright の置き場のものを使う
 if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
@@ -51,13 +63,29 @@ if [ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" = 1 ]; then
   if [ -n "${CHROMIUM_PATH:-}" ]; then
     runnable "$CHROMIUM_PATH" || fail "CHROMIUM_PATH=$CHROMIUM_PATH が動かせない（ブラウザの場所を直すか、unset CHROMIUM_PATH）"
   elif runnable "$pre"; then
-    session_env "CHROMIUM_PATH=$pre"
+    session_env "CHROMIUM_PATH=$(q "$pre")"; export CHROMIUM_PATH="$pre"
   else
     def=$(cd "$npm_dir" && node -e 'try{process.stdout.write(require("playwright").chromium.executablePath())}catch{}' 2>/dev/null || true)
     [ -n "$def" ] && runnable "$def" || fail "使えるブラウザが無い（PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 で取ってこない設定）。CHROMIUM_PATH にブラウザの場所を入れるか、PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD を外して入れ直す"
   fi
 else
-  (cd "$npm_dir" && npx playwright install chromium)
+  if [ -n "${CHROMIUM_PATH:-}" ]; then
+    runnable "$CHROMIUM_PATH" || fail "CHROMIUM_PATH=$CHROMIUM_PATH が動かせない（ブラウザの場所を直すか、unset CHROMIUM_PATH）"
+  else
+    (cd "$npm_dir" && npx playwright install chromium)
+  fi
+fi
+# 本当に起動できるかを試す（Linux で足りないライブラリ・Playwright と合わないブラウザは、ここまでの検査では分からない。版5）。
+# Playwright が入っていない（検査でブラウザを使わない）リポジトリでは試さない
+if ! err=$(cd "$npm_dir" && node -e '
+  let pw; for (const m of ["playwright", "playwright-core", "@playwright/test"]) { try { pw = require(m); break; } catch {} }
+  if (!pw) process.exit(0);
+  pw.chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined }).then((b) => b.close(), (e) => { console.error(String(e.message).split("\n").slice(0, 4).join("\n")); process.exit(1); });
+' 2>&1); then
+  hint="ブラウザの場所（CHROMIUM_PATH）を直す"
+  [ "$(uname -s)" = Linux ] && hint="Linux なら足りないライブラリを sudo npx playwright install-deps chromium で入れる（Playwright Docs「Browsers」）か、$hint"
+  fail "ブラウザを起動できない。$hint
+$err"
 fi
 
 next="node qa/run.mjs"

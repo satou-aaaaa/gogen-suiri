@@ -46,6 +46,9 @@ export async function checkTransfer({ browser, url, game, sample, check, open })
   check("引き継ぎ：QR が出る", await pa.waitForSelector("#hk-qr svg", { timeout: 3000 }).then(() => true, () => false));
   const small = await sizes(pa);
   check("引き継ぎ：ボタンは高さ44px以上", small.length === 0, JSON.stringify(small));
+  // 版7：古いブラウザ向けの縮めないコード（HK0）に作り直せる
+  await pa.click("#hk-plain");
+  check("引き継ぎ：古いブラウザ向けに縮めないコード（HK0）を作り直せる", await pa.waitForFunction(() => /^HK0\./.test(document.querySelector("#hk-code")?.value || ""), null, { timeout: 3000 }).then(() => true, () => false));
   await pa.keyboard.press("Escape");
   check("引き継ぎ：Esc で閉じる", (await pa.locator(".hk-box").count()) === 0);
 

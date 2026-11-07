@@ -121,26 +121,28 @@ const contrastFn = (skip) => {
     if (r.width < 1 || r.height < 1 || cs.visibility === "hidden" || +cs.opacity === 0) continue;
     if (el.disabled || el.getAttribute("aria-disabled") === "true") continue; // 押せない部品は WCAG の対象外
     let fg = parse(cs.color); if (!fg) continue;
-    // うしろの色：自分から上へ、色を重ねていく。絵・グラデーション・半透明の重なり（opacity）があれば測らない
-    // opacity は、その要素の背景も中の字もまとめて薄くする。背景の層ごとに「その層から上の opacity」を掛けて重ねる（2026-11-05 CodeRabbit：字だけ薄くして背景を薄くせず、甘く測っていた）
-    let bg = [0, 0, 0, 0], node = el, unsure = false, layers = [], ops = [];
-    while (node && node.nodeType === 1) {
-      const s = getComputedStyle(node);
-      ops.push(+s.opacity);
-      const c = parse(s.backgroundColor);
+    // うしろの色：自分から上へ、色を重ねていく。絵・グラデーションがあれば測らない
+    // opacity は、その要素の中身（背景も子も字も）をまとめて描いてから薄くする（CSS Color 4「opacity」）。
+    // 字の色・うしろの色のそれぞれを、内側から「その層の背景の上に重ね、その層の opacity で薄くする」をくり返し、最後に白い地へ重ねる。
+    // 不透明な背景で止めると、その上の親の opacity を見逃す（2026-11-07 CodeRabbit：opacity .1 の親の中の白いカードの黒い字を 21:1 と測った）。
+    // 不透明になったあとは、上に opacity が 1 でない親があるときだけ上へ進む
+    const chain = []; for (let n = el; n && n.nodeType === 1; n = n.parentElement) chain.push(n);
+    let gT = fg, gB = [0, 0, 0, 0], unsure = false;
+    for (let i = 0; i < chain.length; i++) {
+      const node = chain[i], s = getComputedStyle(node);
+      const c = parse(s.backgroundColor) || [0, 0, 0, 0];
       if (s.backgroundImage && s.backgroundImage !== "none") {
         // html・body の地の模様（和紙・布目など）は、下に敷いた地の色で測る（2026-11-05 まんなか漢字で全部の字が測れず、金の字の不足を見逃した）
-        if ((node === document.body || node === document.documentElement) && c && c[3] === 1) { layers.push([c, ops.length - 1]); break; }
-        unsure = true; break;
-      } if (c && c[3] > 0) layers.push([c, ops.length - 1]);
-      if (c && c[3] === 1) break;
-      node = node.parentElement;
+        if (!((node === document.body || node === document.documentElement) && c[3] === 1)) { unsure = true; break; }
+      }
+      if (c[3] > 0) { gT = over(gT, c); gB = over(gB, c); }
+      const o = +s.opacity;
+      if (o < 1) { gT = [gT[0], gT[1], gT[2], gT[3] * o]; gB = [gB[0], gB[1], gB[2], gB[3] * o]; }
+      if (gB[3] === 1 && chain.slice(i + 1).every((a) => +getComputedStyle(a).opacity === 1)) break;
     }
     if (unsure) { skipped++; continue; }
-    const upFrom = (i) => ops.slice(i).reduce((a, b) => a * b, 1);
-    bg = [255, 255, 255, 1];
-    for (const [c, i] of layers.reverse()) bg = over([c[0], c[1], c[2], c[3] * upFrom(i)], bg);
-    fg = over([fg[0], fg[1], fg[2], fg[3] * upFrom(0)], bg);
+    const bg = over(gB, [255, 255, 255, 1]);
+    fg = over(gT, [255, 255, 255, 1]);
     const L1 = lum(fg), L2 = lum(bg), ratio = (Math.max(L1, L2) + 0.05) / (Math.min(L1, L2) + 0.05);
     const size = parseFloat(cs.fontSize), bold = +cs.fontWeight >= 700;
     const need = size >= 24 || (bold && size >= 18.66) ? 3 : 4.5;
@@ -232,11 +234,17 @@ for (const sc of screens) {
   check("名前の無いボタン・リンクが無い（記号だけのものは aria-label。WCAG 4.1.2）", r.noname.length === 0, r.noname.join(" / "));
   check("絵に alt がある（飾りは alt=\"\"。WCAG 1.1.1）", r.noalt.length === 0, r.noalt.join(","));
   check("斜体の日本語が無い（BDA Dyslexia Style Guide）", r.italic.length === 0, r.italic.join(","));
-  // Tab で10回動かし、選んだ所に枠（outline か box-shadow）が見えるか
+  // Tab で10回動かし、選んだ所に枠（outline か box-shadow）が見えるか。
+  // 選ぶ前と後を比べる（いつも付いている影だけで通っていた。2026-11-07 CodeRabbit が chikei-ate #1 で指摘）
   const noRing = [];
   for (let i = 0; i < 10; i++) {
     await page.keyboard.press("Tab");
-    const f = await page.evaluate(() => { const el = document.activeElement; if (!el || el === document.body) return null; const cs = getComputedStyle(el); return { ok: (cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) >= 2) || (cs.boxShadow && cs.boxShadow !== "none"), name: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") }; });
+    const f = await page.evaluate(() => {
+      const el = document.activeElement; if (!el || el === document.body) return null;
+      const look = () => { const cs = getComputedStyle(el); return { ol: cs.outlineStyle !== "none" && parseFloat(cs.outlineWidth) >= 2 ? `${cs.outlineStyle} ${cs.outlineWidth} ${cs.outlineColor} ${cs.outlineOffset}` : "", bs: cs.boxShadow && cs.boxShadow !== "none" ? cs.boxShadow : "" }; };
+      const on = look(); el.blur(); const off = look(); el.focus(); // キーボードで動かしたあとの focus() は focus-visible のまま
+      return { ok: !!((on.ol && on.ol !== off.ol) || (on.bs && on.bs !== off.bs)), name: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") };
+    });
     if (f && !f.ok) noRing.push(f.name);
   }
   check("キーボード（Tab）で選んだ所に枠が見える（WCAG 2.4.7）", noRing.length === 0, noRing.join(","));
