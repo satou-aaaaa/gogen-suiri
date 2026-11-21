@@ -82,7 +82,7 @@ button.sub:disabled,button.main:disabled{opacity:.45;cursor:default}
 .tip{background:var(--paper);border:2px dashed var(--gold);border-radius:14px;padding:.6rem .9rem;font-size:.9rem;line-height:1.7;text-align:left}
 .tip b{color:var(--shu2)}
 .tip .en{font-family:var(--f-en);font-weight:700}
-/* 選び肢 */
+/* 選択肢 */
 .choices{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ch{all:unset;box-sizing:border-box;cursor:pointer;position:relative;min-height:4.2rem;display:flex;align-items:center;justify-content:center;border-radius:14px;background:var(--paper);border:3px solid var(--ai);box-shadow:0 4px 0 #24427a55;font-weight:900;font-size:1.05rem;color:var(--ink);padding:1.1rem .5rem .6rem;text-align:center;line-height:1.35}
 .ch:active{transform:translateY(3px);box-shadow:0 2px 0 #24427a55}
@@ -715,7 +715,7 @@ function paint() {
   const h = $("hint"); if (h) h.disabled = cur.done || cur.hints >= 2;
   const nextId = isB() ? P.ans.find((x) => !cur.got.includes(x)) : null;
   const look = isB() ? (nextId ? `次のパーツは「${G.pm(nextId)}」という意味です（点線の札）。` : P.look) : P.look;
-  $("hintbox").innerHTML = cur.hints && !cur.done ? `<div class="hint" role="status">💡 ${esc(look)}${cur.hints >= 2 ? `<br>💡 ちがう${isB() ? "札" : "選び肢"}を消しました。` : ""}</div>` : "";
+  $("hintbox").innerHTML = cur.hints && !cur.done ? `<div class="hint" role="status">💡 ${esc(look)}${cur.hints >= 2 ? `<br>💡 ちがう${isB() ? "札" : "選択肢"}を消しました。` : ""}</div>` : "";
 }
 function hint() { if (cur.done || cur.hints >= 2) return; cur.hints++; keep(); paint(); }
 function wrongAt(x, msg) {
