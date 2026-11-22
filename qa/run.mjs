@@ -14,6 +14,7 @@ import { checkSwStall } from "./sw-check.mjs";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const results = [];
 const check = (name, ok, detail = "") => results.push({ name, ok: !!ok, detail: String(detail).slice(0, 400) });
+const firstClose = async (q) => { if (await q.locator("#howto[open]").count()) await q.click("#howto-ok"); if (await q.locator("#core-coach").count()) { await q.evaluate(() => Core.coach.leave()); await q.waitForTimeout(100); } }; // はじめての練習の吹き出しをやめてホームへ（sync-template の migrateFirstQa が足した）
 const G = createRequire(import.meta.url)(path.join(root, "gen.js"));
 const { PARTS, WORDS } = G;
 
@@ -154,7 +155,7 @@ async function newPage(w = 390, ctx) {
   await p.goto(url); await p.waitForTimeout(200);
   return p;
 }
-const closeHow = async (p) => { if (await p.locator("#howto[open]").count()) await p.click("#howto-ok"); };
+const closeHow = async (p) => { await firstClose(p); };
 const curOf = (p) => p.evaluate(() => { const c = __gg.cur(); return { kind: c.P.kind, ans: c.P.ans, opts: c.P.opts, cards: c.P.cards, wrong: c.wrong, got: c.got, i: c.i, tag: c.tag }; });
 const mem = (p) => p.evaluate(() => JSON.parse(localStorage.getItem("gogen-v1") || "{}"));
 // 1回まちがえる（意味あて・見やぶりは選び肢、組み立ては札）
@@ -173,16 +174,16 @@ async function solve(p, { wrong = 0 } = {}) {
 
 try {
   const p = await newPage();
-  check("はじめて開くと遊び方が出る", await p.locator("#howto[open]").count() === 1);
-  await p.click("#howto-ok");
+  check("はじめて開くと遊び方が出る", await p.locator("#core-coach").waitFor({ timeout: 3000 }).then(() => true, () => false));
+  await firstClose(p);
   {
     // Esc で閉じても「見た」が残り、開き直しても遊び方が出ない（shared-workflows #186。ボタンでしか保存していなかった）
     const q = await newPage();
-    await q.waitForSelector("#howto[open]");
+    await q.waitForSelector("#core-coach");
     let bad = 0;
     for (let i = 0; i < 10; i++) {
       const r = i ? await newPage() : q;
-      await r.waitForSelector("#howto[open]");
+      await r.waitForSelector("#core-coach");
       await r.keyboard.press("Escape");
       if (!(await r.evaluate(() => __gg.load().tut))) bad++;   // 押したその場（すぐ読み直す）
       if (i) await r.context().close();
@@ -191,8 +192,8 @@ try {
     check("遊び方を Esc で閉じてすぐ読み直しても「見た」が残る（10回）・開き直しても出ない", bad === 0 && await q.locator("#howto[open]").count() === 0);
     await q.context().close();
     const o = await newPage();
-    await o.waitForSelector("#howto[open]");
-    await o.click("#howto-ok");
+    await o.waitForSelector("#core-coach");
+    await firstClose(o);
     check("「はじめる」を押したその場で「見た」が残る", await o.evaluate(() => __gg.load().tut) === true);
     await o.context().close();
   }
@@ -456,10 +457,10 @@ try {
     const pw = await browser.newPage({ viewport: { width: 390, height: 844 } });
     pw.on("pageerror", (e) => errors.push(e.message));
     await pw.addInitScript(() => { window.__origSetItem = Storage.prototype.setItem; Storage.prototype.setItem = () => { throw new Error("blocked"); }; });
-    await pw.goto(url); await pw.click("#howto-ok"); await pw.waitForTimeout(2000);
+    await pw.goto(url); await firstClose(pw); await pw.waitForTimeout(2000);
     check("保存できないときは、帯 #savewarn がちょうど1つ出て、2秒たっても残る", (await pw.locator("#savewarn").count()) === 1, await pw.locator("#savewarn").count());
     await pw.evaluate(() => { Storage.prototype.setItem = window.__origSetItem; });
-    await pw.click("#f-how"); await pw.click("#howto-ok");
+    await firstClose(pw).then(() => pw.click("#f-how")); await firstClose(pw);
     check("保存できるようになって次に保存すると、帯 #savewarn が消える", (await pw.locator("#savewarn").count()) === 0);
     await pw.close(); }
 } catch (e) {
@@ -469,7 +470,7 @@ try {
 // 引き継ぎコード（shared-workflows template/qa/transfer-check.mjs）
 try {
   const sample = { "gogen-v1": JSON.stringify({ v: 1, tut: true, days: { "2026-11-07": { m: [0, 1, 0, 0, 2], k: ["g0|1", "g0|2", "b1|3", "b1|4", "g2|5"] } }, hdays: {}, adays: {}, dex: { 1: 1, 2: 1, 3: 1, 4: 1, 5: 1 }, runs: {}, kofi: {}, ach: {}, ebest: 7, t: 1 }), "gogen-fs": "2" };
-  await checkTransfer({ browser, url, game: "gogen-suiri", sample, check, open: async (pg) => { if (await pg.locator("#howto[open]").count()) await pg.click("#howto-ok"); } });
+  await checkTransfer({ browser, url, game: "gogen-suiri", sample, check, open: async (pg) => { await firstClose(pg); } });
 } catch (e) { check("引き継ぎの検査が最後まで動く", false, e.message.split("\n")[0]); }
   { const c = await browser.newContext(); const r = await c.newPage(); const big = []; // 題が h1{flex:1} で縦に伸び（伸びない形と比べて4pxより高ければ失敗）、iPad の縦で大きなすき間が出た（shared-workflows incidents/2026-11-07-title-stretched.md）
     for (const [w, h] of [[820, 1180], [390, 844], [1280, 800]]) { await r.setViewportSize({ width: w, height: h }); await r.goto(url); await r.waitForTimeout(200); await r.keyboard.press("Escape"); await r.waitForTimeout(100);
